@@ -1,0 +1,498 @@
+FIRST SET##Cleaning##
+#include <Adafruit_Fingerprint.h>
+
+HardwareSerial mySerial(2);
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Resetting Fingerprint Sensor...");
+
+  // Correct UART init
+  Serial2.begin(57600, SERIAL_8N1, 16, 17);
+  finger.begin(57600);
+
+  delay(1000);
+
+  // Check sensor connection
+  if (!finger.verifyPassword()) {
+    Serial.println("❌ Sensor NOT detected!");
+    while (1);
+  }
+
+  Serial.println("✅ Sensor detected!");
+
+  // Get template count BEFORE delete
+  finger.getTemplateCount();
+  Serial.print("Stored fingerprints BEFORE: ");
+  Serial.println(finger.templateCount);
+
+  // 🔥 Delete all
+  Serial.println("Deleting all fingerprints...");
+  int result = finger.emptyDatabase();
+
+  if (result == FINGERPRINT_OK) {
+    Serial.println("✅ All fingerprints deleted!");
+  } else {
+    Serial.print("❌ Delete failed. Error code: ");
+    Serial.println(result);
+  }
+
+  // Check AFTER delete
+  finger.getTemplateCount();
+  Serial.print("Stored fingerprints AFTER: ");
+  Serial.println(finger.templateCount);
+}
+
+void loop() {}
+
+
+SECOND ###Loadingggggg###
+
+
+
+#include <Adafruit_Fingerprint.h>
+
+// UART2 for ESP32
+HardwareSerial mySerial(2);
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+int id;
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Fingerprint Enrollment");
+
+  // RX = 16, TX = 17
+  Serial2.begin(57600, SERIAL_8N1, 16, 17);
+  finger.begin(57600);
+
+  if (finger.verifyPassword()) {
+    Serial.println("Sensor Found!");
+  } else {
+    Serial.println("Sensor NOT Found!");
+    while (1);
+  }
+
+  Serial.println("\nEnter ID (1-10) to store:");
+}
+
+void loop() {
+
+  // Wait for ID input
+  if (Serial.available()) {
+    id = Serial.parseInt();
+
+    if (id < 1 || id > 10) {
+      Serial.println("Enter ID between 1 and 5");
+      return;
+    }
+
+    Serial.print("Storing Fingerprint ID: ");
+    Serial.println(id);
+
+    enrollFingerprint(id);
+  }
+}
+
+// =================================================
+void enrollFingerprint(int id) {
+
+  int p = -1;
+
+  Serial.println("Place finger...");
+
+  // FIRST SCAN
+  while (p != FINGERPRINT_OK) {
+    p = finger.getImage();
+  }
+
+  finger.image2Tz(1);
+  Serial.println("Remove finger...");
+  delay(2000);
+
+  // WAIT REMOVE
+  while (finger.getImage() != FINGERPRINT_NOFINGER);
+
+  Serial.println("Place same finger again...");
+
+  p = -1;
+
+  // SECOND SCAN
+  while (p != FINGERPRINT_OK) {
+    p = finger.getImage();
+  }
+
+  finger.image2Tz(2);
+
+  // CREATE MODEL
+  if (finger.createModel() != FINGERPRINT_OK) {
+    Serial.println("Error creating model");
+    return;
+  }
+
+  // STORE
+  if (finger.storeModel(id) == FINGERPRINT_OK) {
+    Serial.println("Stored Successfully!");
+  } else {
+    Serial.println("Error storing fingerprint");
+  }
+
+  Serial.println("\nEnter next ID:");
+}
+
+
+
+
+THIRD CODE:::::EVM Working::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+#include <Adafruit_Fingerprint.h>
+#include <LiquidCrystal_I2C.h>
+#include <Preferences.h>
+
+//////////////////// PIN DEFINITIONS ////////////////////
+
+#define BTN1 25
+#define BTN2 32
+#define BTN3 33
+
+// Fingerprint UART
+#define RXD2 16   // Fingerprint TX → ESP32 RX
+#define TXD2 17   // Fingerprint RX → ESP32 TX
+
+// Voice Module UART
+#define VOICE_RX 27
+#define VOICE_TX 26
+
+//////////////////// OBJECTS ////////////////////
+
+HardwareSerial mySerial(2);
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+HardwareSerial voiceSerial(1);
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+Preferences preferences;
+
+//////////////////// VARIABLES ////////////////////
+
+bool hasVoted[6];        // Users 1–5
+int voteCount[3] = {0};  // Candidate A, B, C
+
+bool last1 = HIGH;
+bool last2 = HIGH;
+bool last3 = HIGH;
+
+bool votingActive = true;
+
+/////////////////////////////////////////////////////////
+// 🔊 VOICE PLAY FUNCTION
+/////////////////////////////////////////////////////////
+
+void playVoice(uint8_t track)
+{
+  uint8_t cmd[8] =
+  {
+    0x7E,
+    0xFF,
+    0x06,
+    0x03,
+    0x00,
+    0x00,
+    track,
+    0xEF
+  };
+
+  delay(20);
+
+  voiceSerial.write(cmd, 8);
+
+  delay(1000);
+}
+
+/////////////////////////////////////////////////////////
+// SETUP
+/////////////////////////////////////////////////////////
+
+void setup()
+{
+  Serial.begin(115200);
+
+  ////////////////// BUTTONS //////////////////
+
+  pinMode(BTN1, INPUT_PULLUP);
+  pinMode(BTN2, INPUT_PULLUP);
+  pinMode(BTN3, INPUT_PULLUP);
+
+  ////////////////// LCD //////////////////
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.print("EVM Starting");
+
+
+  ////////////////// VOICE MODULE //////////////////
+
+  voiceSerial.begin(9600, SERIAL_8N1, VOICE_RX, VOICE_TX);
+
+  ////////////////// FINGERPRINT //////////////////
+
+  mySerial.begin(57600, SERIAL_8N1, RXD2, TXD2);
+
+  finger.begin(57600);
+
+  if (!finger.verifyPassword())
+  {
+    lcd.clear();
+    lcd.print("FP Error!");
+
+    while (1);
+  }
+
+  ////////////////// LOAD MEMORY //////////////////
+
+  preferences.begin("evm", false);
+
+  for (int i = 1; i <= 5; i++)
+  {
+    hasVoted[i] =
+      preferences.getBool(("U" + String(i)).c_str(), false);
+  }
+
+  voteCount[0] = preferences.getInt("A", 0);
+  voteCount[1] = preferences.getInt("B", 0);
+  voteCount[2] = preferences.getInt("C", 0);
+
+  delay(2000);
+
+  resetLCD();
+}
+
+/////////////////////////////////////////////////////////
+// MAIN LOOP
+/////////////////////////////////////////////////////////
+
+void loop()
+{
+  ////////////////// STOP VOTING //////////////////
+
+  if (Serial.available())
+  {
+    String pass = Serial.readStringUntil('\n');
+
+    pass.trim();
+
+    if (pass == "1234")
+    {
+      votingActive = false;
+
+      showResult();
+    }
+  }
+
+  if (!votingActive)
+    return;
+
+  ////////////////// GET FINGERPRINT //////////////////
+
+  int id = getFingerprintID();
+
+  if (id == -1)
+    return;
+
+  lcd.clear();
+
+  lcd.print("User ID: ");
+  lcd.print(id);
+
+  ////////////////// INVALID USER //////////////////
+
+  if (id < 1 || id > 5)
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("Not Allowed");
+
+    playVoice(11);
+
+    delay(2000);
+
+    resetLCD();
+
+    return;
+  }
+
+  ////////////////// ALREADY VOTED //////////////////
+
+  if (hasVoted[id])
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("Already Voted");
+
+    playVoice(8);
+
+    delay(2000);
+
+    resetLCD();
+
+    return;
+  }
+
+  ////////////////// AUTH SUCCESS //////////////////
+
+  lcd.setCursor(0, 1);
+  lcd.print("Press Button");
+
+  playVoice(10);
+
+  ////////////////// GET BUTTON //////////////////
+
+  int vote = getButtonPress();
+
+  ////////////////// STORE VOTE //////////////////
+
+  voteCount[vote]++;
+
+  hasVoted[id] = true;
+
+  ////////////////// SAVE TO MEMORY //////////////////
+
+  preferences.putBool(("U" + String(id)).c_str(), true);
+
+  preferences.putInt("A", voteCount[0]);
+  preferences.putInt("B", voteCount[1]);
+  preferences.putInt("C", voteCount[2]);
+
+  ////////////////// SUCCESS //////////////////
+
+  lcd.clear();
+
+  lcd.print("Vote Saved");
+
+  playVoice(12);
+
+  delay(2000);
+
+  resetLCD();
+}
+
+/////////////////////////////////////////////////////////
+// 🔍 FINGERPRINT FUNCTION
+/////////////////////////////////////////////////////////
+
+int getFingerprintID()
+{
+  if (finger.getImage() != FINGERPRINT_OK)
+    return -1;
+
+  if (finger.image2Tz() != FINGERPRINT_OK)
+    return -1;
+
+  if (finger.fingerSearch() != FINGERPRINT_OK)
+    return -1;
+
+  return finger.fingerID;
+}
+
+/////////////////////////////////////////////////////////
+// 🔘 BUTTON FUNCTION
+/////////////////////////////////////////////////////////
+
+int getButtonPress()
+{
+  while (1)
+  {
+    bool b1 = digitalRead(BTN1);
+    bool b2 = digitalRead(BTN2);
+    bool b3 = digitalRead(BTN3);
+
+    if (last1 == HIGH && b1 == LOW)
+    {
+      delay(200);
+      return 0;
+    }
+
+    if (last2 == HIGH && b2 == LOW)
+    {
+      delay(200);
+      return 1;
+    }
+
+    if (last3 == HIGH && b3 == LOW)
+    {
+      delay(200);
+      return 2;
+    }
+
+    last1 = b1;
+    last2 = b2;
+    last3 = b3;
+
+    delay(50);
+  }
+}
+
+/////////////////////////////////////////////////////////
+// 🔄 RESET LCD
+/////////////////////////////////////////////////////////
+
+void resetLCD()
+{
+  lcd.clear();
+
+  lcd.print("Place Finger");
+
+  playVoice(9);
+}
+
+/////////////////////////////////////////////////////////
+// 📊 SHOW RESULT
+/////////////////////////////////////////////////////////
+
+void showResult()
+{
+  lcd.clear();
+
+  lcd.print("Voting Ended");
+
+  playVoice(15);
+
+  Serial.println("\n---- FINAL RESULT ----");
+
+  Serial.print("Candidate A: ");
+  Serial.println(voteCount[0]);
+
+  Serial.print("Candidate B: ");
+  Serial.println(voteCount[1]);
+
+  Serial.print("Candidate C: ");
+  Serial.println(voteCount[2]);
+
+  ////////////////// WINNER LOGIC //////////////////
+
+  int maxVotes = voteCount[0];
+
+  String winner = "A";
+
+  if (voteCount[1] > maxVotes)
+  {
+    maxVotes = voteCount[1];
+    winner = "B";
+  }
+
+  if (voteCount[2] > maxVotes)
+  {
+    maxVotes = voteCount[2];
+    winner = "C";
+  }
+
+  Serial.print("Winner: Candidate ");
+  Serial.println(winner);
+
+  delay(5000);
+
+  lcd.clear();
+
+  lcd.print("Check Serial");
+}
